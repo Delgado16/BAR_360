@@ -1,0 +1,8 @@
+{
+  "/(platform)/platform/audit/page": "app/(platform)/platform/audit/page.js",
+  "/(platform)/platform/settings/page": "app/(platform)/platform/settings/page.js",
+  "/(platform)/platform/dashboard/page": "app/(platform)/platform/dashboard/page.js",
+  "/(tenant)/[tenantSlug]/users/page": "app/(tenant)/[tenantSlug]/users/page.js",
+  "/(tenant)/[tenantSlug]/dashboard/page": "app/(tenant)/[tenantSlug]/dashboard/page.js",
+  "/(tenant)/[tenantSlug]/products/page": "app/(tenant)/[tenantSlug]/products/page.js"
+}

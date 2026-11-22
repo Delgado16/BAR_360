@@ -1,0 +1,1406 @@
+// ============================================================================
+// MI NEGOCIO PRO 360 — PLATAFORMA SaaS EMPRESARIAL MULTI-TENANT
+// Esquema Prisma Oficial (PostgreSQL / Supabase)
+// Cubre las secciones 6.1 a 6.9 del Prompt Maestro y las 21 hojas del Excel
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ============================================================================
+// ENUMS DE DOMINIO
+// ============================================================================
+
+enum PlatformRole {
+  USER
+  SUPER_ADMIN
+}
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  TRIAL_EXPIRED
+  ARCHIVED
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+}
+
+enum RoleCode {
+  SUPER_ADMIN
+  TENANT_OWNER
+  TENANT_ADMIN
+  CASHIER_SELLER
+  INVENTORY_MANAGER
+  ACCOUNTANT_FINANCE
+  CUSTOM
+}
+
+enum PermissionAction {
+  VIEW
+  CREATE
+  EDIT
+  VOID
+  EXPORT
+  APPROVE
+  MANAGE
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  GRACE_PERIOD
+  SUSPENDED
+  CANCELED
+}
+
+enum BillingInterval {
+  MONTHLY
+  ANNUAL
+}
+
+enum TaxTreatment {
+  RECOVERABLE     // "Recuperable (no se suma al costo)" -> cfg_ImpCosto = 0
+  NON_RECOVERABLE // "No recuperable (se suma al costo)" -> cfg_ImpCosto = 1
+}
+
+enum ProductRankingCriterion {
+  REVENUE // "Ingresos"
+  UNITS   // "Unidades"
+}
+
+enum ItemType {
+  PRODUCT // "Producto"
+  SERVICE // "Servicio"
+}
+
+enum EntityStatus {
+  ACTIVE   // "Activo"
+  INACTIVE // "Inactivo"
+}
+
+enum CustomerType {
+  REGISTERED // "Cliente registrado"
+  GENERIC    // "Genérico (mostrador)"
+}
+
+enum FinancialAccountType {
+  CASH           // "Caja"
+  BANK           // "Banco"
+  DIGITAL_WALLET // "Billetera digital"
+}
+
+enum PaymentCondition {
+  CASH   // "Contado"
+  CREDIT // "Crédito"
+}
+
+enum DocumentStatus {
+  DRAFT
+  CONFIRMED
+  VOIDED
+}
+
+enum SettlementStatus {
+  PENDING  // "Pendiente"
+  DUE_SOON // "Por vencer" (<= 7 días desde fecha de corte)
+  PARTIAL  // "Parcial"
+  SETTLED  // "Cobrado" / "Pagado"
+  OVERDUE  // "Vencido"
+  VOIDED   // "Anulado"
+}
+
+enum PayableSourceType {
+  PURCHASE // "C" - Compra de inventario a crédito
+  EXPENSE  // "G" - Gasto operativo a crédito
+}
+
+enum InventoryMovementType {
+  OPENING_BALANCE
+  PURCHASE_IN
+  PURCHASE_VOID_OUT
+  SALE_OUT
+  SALE_VOID_IN
+  ADJUSTMENT_POSITIVE // "Positivo (+)"
+  ADJUSTMENT_NEGATIVE // "Negativo (-)"
+}
+
+enum InventoryAdjustmentReasonType {
+  SHRINKAGE      // Merma
+  SURPLUS        // Sobrante
+  PHYSICAL_COUNT // Conteo físico
+  CORRECTION     // Corrección justificada
+}
+
+enum CashMovementDirection {
+  INFLOW  // "Entrada (+)"
+  OUTFLOW // "Salida (-)"
+}
+
+enum CashMovementCategory {
+  OPENING_BALANCE
+  CASH_SALE
+  RECEIVABLE_COLLECTION
+  CASH_PURCHASE
+  CASH_EXPENSE
+  PAYABLE_PAYMENT
+  TRANSFER_IN
+  TRANSFER_OUT
+  CASH_ADJUSTMENT_IN
+  CASH_ADJUSTMENT_OUT
+  VOID_REVERSAL
+}
+
+enum ReconciliationStatus {
+  OK      // "OK"
+  REVIEW  // "REVISAR"
+  ALERT   // "ALERTA"
+}
+
+// ============================================================================
+// 6.1 PLATAFORMA SaaS, AUTENTICACIÓN, ROLES, PERMISOS Y SUSCRIPCIONES
+// ============================================================================
+
+model User {
+  id             String       @id @default(uuid()) @db.Uuid
+  supabaseAuthId String?      @unique @map("supabase_auth_id") @db.Uuid
+  email          String       @unique
+  fullName       String       @map("full_name")
+  phone          String?
+  avatarUrl      String?      @map("avatar_url")
+  platformRole   PlatformRole @default(USER) @map("platform_role")
+  isActive       Boolean      @default(true) @map("is_active")
+  lastLoginAt    DateTime?    @map("last_login_at")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  memberships     TenantMembership[]
+  sentInvitations Invitation[]       @relation("InvitedByUser")
+  auditLogs       AuditLog[]
+
+  @@map("users")
+}
+
+model Tenant {
+  id           String       @id @default(uuid()) @db.Uuid
+  slug         String       @unique
+  legalName    String       @map("legal_name")
+  tradeName    String       @map("trade_name")
+  businessType String       @default("Comercio minorista / tienda") @map("business_type")
+  taxId        String?      @map("tax_id")
+  email        String?
+  phone        String?
+  address      String?
+  status       TenantStatus @default(ACTIVE)
+  suspendedAt  DateTime?    @map("suspended_at")
+  suspendReason String?     @map("suspend_reason")
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+
+  settings               BusinessSettings?
+  creditSettings         CreditSettings?
+  memberships            TenantMembership[]
+  roles                  Role[]
+  invitations            Invitation[]
+  subscriptions          Subscription[]
+  usageRecords           TenantUsage[]
+  featureEntitlements    FeatureEntitlement[]
+  documentSequences      DocumentSequence[]
+  taxProfiles            TaxProfile[]
+  productCategories      ProductCategory[]
+  expenseCategories      ExpenseCategory[]
+  unitsOfMeasure         UnitOfMeasure[]
+  paymentMethods         PaymentMethod[]
+  financialAccounts      FinancialAccount[]
+  products               Product[]
+  productSuppliers       ProductSupplier[]
+  customers              Customer[]
+  suppliers              Supplier[]
+  sales                  Sale[]
+  saleItems              SaleItem[]
+  salePayments           SalePayment[]
+  purchases              Purchase[]
+  purchaseItems          PurchaseItem[]
+  purchasePayments       PurchasePayment[]
+  operatingExpenses      OperatingExpense[]
+  openingBalances        InventoryOpeningBalance[]
+  inventoryMovements     InventoryMovement[]
+  inventoryAdjustments   InventoryAdjustment[]
+  inventoryMonthlyCosts  InventoryMonthlyCost[]
+  valuationPeriods       InventoryValuationPeriod[]
+  accountsReceivable     AccountReceivable[]
+  receivableAllocations  ReceivableAllocation[]
+  accountsPayable        AccountPayable[]
+  payableAllocations     PayableAllocation[]
+  cashMovements          CashMovement[]
+  bankTransfers          BankTransfer[]
+  cashAdjustments        CashAdjustment[]
+  reconciliations        FinancialReconciliation[]
+  auditLogs              AuditLog[]
+  notifications          SystemNotification[]
+
+  @@index([status])
+  @@map("tenants")
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String?  @map("tenant_id") @db.Uuid // null = rol base del sistema
+  code        RoleCode
+  name        String
+  description String?
+  isSystem    Boolean  @default(false) @map("is_system")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  tenant          Tenant?            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  rolePermissions RolePermission[]
+  memberships     TenantMembership[]
+  invitations     Invitation[]
+
+  @@unique([tenantId, code, name])
+  @@map("roles")
+}
+
+model Permission {
+  id          String           @id @default(uuid()) @db.Uuid
+  resource    String           // ej: "sales", "purchases", "inventory", "expenses", "receivables", "payables", "cash", "reports", "reconciliations", "settings", "users", "subscriptions"
+  action      PermissionAction
+  description String?
+  createdAt   DateTime         @default(now()) @map("created_at")
+
+  rolePermissions       RolePermission[]
+  membershipPermissions MembershipPermission[]
+
+  @@unique([resource, action])
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String   @id @default(uuid()) @db.Uuid
+  roleId       String   @map("role_id") @db.Uuid
+  permissionId String   @map("permission_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model TenantMembership {
+  id        String           @id @default(uuid()) @db.Uuid
+  tenantId  String           @map("tenant_id") @db.Uuid
+  userId    String           @map("user_id") @db.Uuid
+  roleId    String           @map("role_id") @db.Uuid
+  status    MembershipStatus @default(ACTIVE)
+  isDefault Boolean          @default(false) @map("is_default")
+  joinedAt  DateTime         @default(now()) @map("joined_at")
+  createdAt DateTime         @default(now()) @map("created_at")
+  updatedAt DateTime         @updatedAt @map("updated_at")
+
+  tenant                Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  user                  User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  role                  Role                   @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  membershipPermissions MembershipPermission[]
+
+  @@unique([tenantId, userId])
+  @@index([userId, status])
+  @@map("tenant_memberships")
+}
+
+model MembershipPermission {
+  id           String   @id @default(uuid()) @db.Uuid
+  membershipId String   @map("membership_id") @db.Uuid
+  permissionId String   @map("permission_id") @db.Uuid
+  granted      Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  membership TenantMembership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  permission Permission       @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([membershipId, permissionId])
+  @@map("membership_permissions")
+}
+
+model Invitation {
+  id              String    @id @default(uuid()) @db.Uuid
+  tenantId        String    @map("tenant_id") @db.Uuid
+  email           String
+  roleId          String    @map("role_id") @db.Uuid
+  token           String    @unique
+  invitedByUserId String    @map("invited_by_user_id") @db.Uuid
+  expiresAt       DateTime  @map("expires_at")
+  acceptedAt      DateTime? @map("accepted_at")
+  revokedAt       DateTime? @map("revoked_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  role      Role   @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  invitedBy User   @relation("InvitedByUser", fields: [invitedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, email])
+  @@map("invitations")
+}
+
+model SubscriptionPlan {
+  id                  String   @id @default(uuid()) @db.Uuid
+  code                String   @unique // BASIC, PRO, ENTERPRISE
+  name                String
+  description         String?
+  monthlyPrice        Decimal  @map("monthly_price") @db.Decimal(14, 2)
+  annualPrice         Decimal  @map("annual_price") @db.Decimal(14, 2)
+  currencyCode        String   @default("USD") @map("currency_code")
+  trialDays           Int      @default(14) @map("trial_days")
+  maxUsers            Int      @map("max_users")
+  maxProducts         Int      @map("max_products")
+  maxMonthlySales     Int      @map("max_monthly_sales")
+  featuresJson        Json     @map("features_json")
+  isActive            Boolean  @default(true) @map("is_active")
+  sortOrder           Int      @default(0) @map("sort_order")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  subscriptions Subscription[]
+
+  @@map("subscription_plans")
+}
+
+model Subscription {
+  id                   String             @id @default(uuid()) @db.Uuid
+  tenantId             String             @map("tenant_id") @db.Uuid
+  planId               String             @map("plan_id") @db.Uuid
+  status               SubscriptionStatus @default(TRIALING)
+  billingInterval      BillingInterval    @default(MONTHLY) @map("billing_interval")
+  currentPeriodStart   DateTime           @map("current_period_start")
+  currentPeriodEnd     DateTime           @map("current_period_end")
+  trialEndsAt          DateTime?          @map("trial_ends_at")
+  gracePeriodEndsAt    DateTime?          @map("grace_period_ends_at")
+  cancelAtPeriodEnd    Boolean            @default(false) @map("cancel_at_period_end")
+  canceledAt           DateTime?          @map("canceled_at")
+  billingProvider      String?            @map("billing_provider")
+  externalCustomerId   String?            @map("external_customer_id")
+  externalSubId        String?            @map("external_sub_id")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
+
+  tenant Tenant              @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  plan   SubscriptionPlan    @relation(fields: [planId], references: [id], onDelete: Restrict)
+  events SubscriptionEvent[]
+
+  @@index([tenantId, status])
+  @@map("subscriptions")
+}
+
+model SubscriptionEvent {
+  id             String   @id @default(uuid()) @db.Uuid
+  subscriptionId String   @map("subscription_id") @db.Uuid
+  eventType      String   @map("event_type")
+  previousStatus String?  @map("previous_status")
+  newStatus      String?  @map("new_status")
+  amount         Decimal? @db.Decimal(14, 2)
+  currencyCode   String?  @map("currency_code")
+  metadataJson   Json?    @map("metadata_json")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+
+  @@index([subscriptionId, createdAt])
+  @@map("subscription_events")
+}
+
+model PaymentProviderEvent {
+  id              String    @id @default(uuid()) @db.Uuid
+  provider        String
+  externalEventId String    @unique @map("external_event_id")
+  eventType       String    @map("event_type")
+  payloadJson     Json      @map("payload_json")
+  signatureValid  Boolean   @default(false) @map("signature_valid")
+  processedAt     DateTime? @map("processed_at")
+  errorMessage    String?   @map("error_message")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  @@map("payment_provider_events")
+}
+
+model TenantUsage {
+  id                String   @id @default(uuid()) @db.Uuid
+  tenantId          String   @map("tenant_id") @db.Uuid
+  year              Int
+  month             Int
+  activeUsersCount  Int      @default(0) @map("active_users_count")
+  productsCount     Int      @default(0) @map("products_count")
+  salesCount        Int      @default(0) @map("sales_count")
+  purchasesCount    Int      @default(0) @map("purchases_count")
+  storageBytesUsed  BigInt   @default(0) @map("storage_bytes_used")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, year, month])
+  @@map("tenant_usage")
+}
+
+model FeatureEntitlement {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  featureKey String   @map("feature_key")
+  isEnabled  Boolean  @default(true) @map("is_enabled")
+  limitValue Int?     @map("limit_value")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, featureKey])
+  @@map("feature_entitlements")
+}
+
+model AuditLog {
+  id                     String   @id @default(uuid()) @db.Uuid
+  tenantId               String?  @map("tenant_id") @db.Uuid
+  actorUserId            String?  @map("actor_user_id") @db.Uuid
+  action                 String   // ej: "SALE_CONFIRMED", "SALE_VOIDED", "COST_RECALCULATED", "SUPPORT_IMPERSONATION"
+  entityType             String   @map("entity_type")
+  entityId               String?  @map("entity_id")
+  beforeJson             Json?    @map("before_json")
+  afterJson              Json?    @map("after_json")
+  reason                 String?
+  ipAddress              String?  @map("ip_address")
+  userAgent              String?  @map("user_agent")
+  isSupportAccess        Boolean  @default(false) @map("is_support_access")
+  supportAuthorizationId String?  @map("support_authorization_id")
+  createdAt              DateTime @default(now()) @map("created_at")
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  actor  User?   @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
+
+model SystemNotification {
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String?   @map("tenant_id") @db.Uuid
+  userId    String?   @map("user_id") @db.Uuid
+  level     String    @default("INFO") // INFO, WARNING, CRITICAL
+  title     String
+  message   String
+  actionUrl String?   @map("action_url")
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, readAt])
+  @@map("system_notifications")
+}
+
+// ============================================================================
+// 6.2 CONFIGURACIÓN EMPRESARIAL (Hoja CONFIGURACIÓN)
+// ============================================================================
+
+model Currency {
+  code          String   @id // NIO, USD, MXN, COP, EUR
+  name          String
+  symbol        String   // C$, $, €
+  decimalPlaces Int      @default(2) @map("decimal_places")
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  businessSettings BusinessSettings[]
+
+  @@map("currencies")
+}
+
+model BusinessSettings {
+  id                       String                  @id @default(uuid()) @db.Uuid
+  tenantId                 String                  @unique @map("tenant_id") @db.Uuid
+  tradeName                String                  @map("trade_name")                // cfg_Negocio
+  businessType             String                  @map("business_type")             // cfg_TipoNeg
+  currencyCode             String                  @default("NIO") @map("currency_code") // cfg_Moneda
+  currencySymbol           String                  @default("C$") @map("currency_symbol") // cfg_Simbolo
+  timezone                 String                  @default("America/Managua")
+  operatingYear            Int                     @default(2026) @map("operating_year") // cfg_Anio
+  analysisMonth            Int                     @default(11) @map("analysis_month")   // cfg_Mes (1..12)
+  selectedDashboardDate    DateTime                @default(now()) @map("selected_dashboard_date") @db.Date // cfg_Dia
+  cutoffDate               DateTime                @default(now()) @map("cutoff_date") @db.Date             // cfg_Corte
+  rankingCriterion         ProductRankingCriterion @default(REVENUE) @map("ranking_criterion") // cfg_Criterio
+  targetInventoryCoverage  Decimal                 @default(2.00) @map("target_inventory_coverage") @db.Decimal(8, 2) // cfg_Cobertura
+  taxTreatment             TaxTreatment            @default(RECOVERABLE) @map("tax_treatment") // cfg_ImpTrat / cfg_ImpCosto
+  reconciliationTolerance  Decimal                 @default(0.01) @map("reconciliation_tolerance") @db.Decimal(8, 4) // cfg_Tol
+  allowNegativeStock       Boolean                 @default(false) @map("allow_negative_stock")
+  createdAt                DateTime                @default(now()) @map("created_at")
+  updatedAt                DateTime                @updatedAt @map("updated_at")
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  currency Currency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+
+  @@map("business_settings")
+}
+
+model CreditSettings {
+  id                        String   @id @default(uuid()) @db.Uuid
+  tenantId                  String   @unique @map("tenant_id") @db.Uuid
+  defaultCustomerCreditDays Int      @default(30) @map("default_customer_credit_days") // cfg_PlazoCli
+  defaultSupplierCreditDays Int      @default(30) @map("default_supplier_credit_days") // cfg_PlazoProv
+  dueSoonAlertDays          Int      @default(7) @map("due_soon_alert_days")           // Alerta "Por vencer" <= 7 días
+  allowOverpaymentWithPolicy Boolean @default(false) @map("allow_overpayment_with_policy")
+  createdAt                 DateTime @default(now()) @map("created_at")
+  updatedAt                 DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("credit_settings")
+}
+
+model TaxProfile {
+  id          String       @id @default(uuid()) @db.Uuid
+  tenantId    String       @map("tenant_id") @db.Uuid
+  name        String       // tax_Nombre: "Sin impuesto", "Impuesto A", etc.
+  rate        Decimal      @default(0.0000) @db.Decimal(7, 4) // tax_Tasa: 0.0000 a 1.0000 (ej. 0.1500 = 15%)
+  isDefault   Boolean      @default(false) @map("is_default")
+  status      EntityStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  saleItems         SaleItem[]
+  purchaseItems     PurchaseItem[]
+  operatingExpenses OperatingExpense[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, status])
+  @@map("tax_profiles")
+}
+
+model ProductCategory {
+  id          String       @id @default(uuid()) @db.Uuid
+  tenantId    String       @map("tenant_id") @db.Uuid
+  name        String       // cat_Prod: Alimentos, Bebidas, Limpieza, etc.
+  description String?
+  sortOrder   Int          @default(0) @map("sort_order")
+  status      EntityStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  products Product[]
+
+  @@unique([tenantId, name])
+  @@map("product_categories")
+}
+
+model ExpenseCategory {
+  id          String       @id @default(uuid()) @db.Uuid
+  tenantId    String       @map("tenant_id") @db.Uuid
+  name        String       // cat_Gasto: Alquiler, Electricidad, Agua, Salarios, etc.
+  description String?
+  sortOrder   Int          @default(0) @map("sort_order")
+  status      EntityStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  tenant   Tenant             @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  expenses OperatingExpense[]
+
+  @@unique([tenantId, name])
+  @@map("expense_categories")
+}
+
+model UnitOfMeasure {
+  id           String       @id @default(uuid()) @db.Uuid
+  tenantId     String       @map("tenant_id") @db.Uuid
+  name         String       // lst_Unidades: Unidad, Bolsa, Botella, Litro, Libra, etc.
+  abbreviation String?
+  status       EntityStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  products Product[]
+
+  @@unique([tenantId, name])
+  @@map("units_of_measure")
+}
+
+model PaymentMethod {
+  id        String       @id @default(uuid()) @db.Uuid
+  tenantId  String       @map("tenant_id") @db.Uuid
+  name      String       // met_Nombre: Efectivo, Transferencia, Tarjeta, Billetera digital, Cheque, Otro
+  status    EntityStatus @default(ACTIVE)
+  sortOrder Int          @default(0) @map("sort_order")
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  sales            Sale[]
+  salePayments     SalePayment[]
+  purchasePayments PurchasePayment[]
+  expenses         OperatingExpense[]
+  cashMovements    CashMovement[]
+
+  @@unique([tenantId, name])
+  @@map("payment_methods")
+}
+
+model FinancialAccount {
+  id             String               @id @default(uuid()) @db.Uuid
+  tenantId       String               @map("tenant_id") @db.Uuid
+  name           String               // acc_Nombre: Caja general, Banco principal
+  type           FinancialAccountType // acc_Tipo: CASH, BANK, DIGITAL_WALLET
+  openingBalance Decimal              @default(0.00) @map("opening_balance") @db.Decimal(14, 2) // acc_SaldoIni
+  openingDate    DateTime             @default(now()) @map("opening_date") @db.Date
+  accountNumber  String?              @map("account_number")
+  bankName       String?              @map("bank_name")
+  status         EntityStatus         @default(ACTIVE)
+  createdAt      DateTime             @default(now()) @map("created_at")
+  updatedAt      DateTime             @updatedAt @map("updated_at")
+
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  sales             Sale[]
+  salePayments      SalePayment[]
+  purchases         Purchase[]
+  purchasePayments  PurchasePayment[]
+  expenses          OperatingExpense[]
+  cashMovements     CashMovement[]
+  transfersOut      BankTransfer[]     @relation("TransferSourceAccount")
+  transfersIn       BankTransfer[]     @relation("TransferDestAccount")
+  cashAdjustments   CashAdjustment[]
+
+  @@unique([tenantId, name])
+  @@map("financial_accounts")
+}
+
+model DocumentSequence {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  docType     String   @map("doc_type") // SALE, PURCHASE, EXPENSE, COLLECTION, PAYMENT, TRANSFER, INV_ADJ, CASH_ADJ
+  prefix      String   // VTA-, COMP-, GAS-, COB-, PAG-, TRF-, AJI-, COR-
+  currentNext Int      @default(1) @map("current_next")
+  padding     Int      @default(4)
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, docType])
+  @@map("document_sequences")
+}
+
+// ============================================================================
+// 6.3 CATÁLOGOS: CLIENTES, PROVEEDORES Y PRODUCTOS/SERVICIOS
+// ============================================================================
+
+model Customer {
+  id           String       @id @default(uuid()) @db.Uuid
+  tenantId     String       @map("tenant_id") @db.Uuid
+  code         String       // cli_ID
+  name         String       // cli_Nombre
+  phone        String?      // cli_Tel
+  email        String?      // cli_Correo
+  taxId        String?      @map("tax_id")
+  address      String?
+  customerType CustomerType @default(REGISTERED) @map("customer_type") // cli_Tipo
+  creditDays   Int?         @map("credit_days")
+  creditLimit  Decimal?     @map("credit_limit") @db.Decimal(14, 2)
+  status       EntityStatus @default(ACTIVE) // cli_Estado
+  createdBy    String?      @map("created_by") @db.Uuid
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  sales              Sale[]
+  accountsReceivable AccountReceivable[]
+
+  @@unique([tenantId, code])
+  @@unique([tenantId, name])
+  @@index([tenantId, status])
+  @@map("customers")
+}
+
+model Supplier {
+  id           String       @id @default(uuid()) @db.Uuid
+  tenantId     String       @map("tenant_id") @db.Uuid
+  code         String       // prv_ID
+  name         String       // prv_Nombre
+  contactName  String?      @map("contact_name") // prv_Contacto
+  phone        String?      // prv_Tel
+  email        String?      // prv_Correo
+  suppliedInfo String?      @map("supplied_info") // prv_Suministra
+  taxId        String?      @map("tax_id")
+  creditDays   Int?         @map("credit_days")
+  status       EntityStatus @default(ACTIVE) // prv_Estado
+  createdBy    String?      @map("created_by") @db.Uuid
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+
+  tenant            Tenant            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  preferredProducts Product[]         @relation("PreferredSupplier")
+  productSuppliers  ProductSupplier[]
+  purchases         Purchase[]
+  accountsPayable   AccountPayable[]
+
+  @@unique([tenantId, code])
+  @@unique([tenantId, name])
+  @@index([tenantId, status])
+  @@map("suppliers")
+}
+
+model Product {
+  id                  String       @id @default(uuid()) @db.Uuid
+  tenantId            String       @map("tenant_id") @db.Uuid
+  sku                 String       // prod_SKU (único por tenant)
+  name                String       // prod_Nombre
+  description         String?      // prod_Desc
+  categoryId          String       @map("category_id") @db.Uuid // prod_Cat
+  type                ItemType     @default(PRODUCT) // prod_Tipo: PRODUCT o SERVICE
+  unitId              String       @map("unit_id") @db.Uuid // prod_Unidad
+  salePrice           Decimal      @map("sale_price") @db.Decimal(14, 4) // prod_Precio (sin impuesto)
+  referenceCost       Decimal      @default(0.0000) @map("reference_cost") @db.Decimal(14, 4) // prod_Costo
+  preferredSupplierId String?      @map("preferred_supplier_id") @db.Uuid // prod_Prov
+  minimumStock        Decimal      @default(0.0000) @map("minimum_stock") @db.Decimal(14, 4) // prod_Min
+  status              EntityStatus @default(ACTIVE) // prod_Estado
+  createdBy           String?      @map("created_by") @db.Uuid
+  createdAt           DateTime     @default(now()) @map("created_at")
+  updatedAt           DateTime     @updatedAt @map("updated_at")
+
+  tenant            Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  category          ProductCategory           @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  unit              UnitOfMeasure             @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  preferredSupplier Supplier?                 @relation("PreferredSupplier", fields: [preferredSupplierId], references: [id], onDelete: Restrict)
+  productSuppliers  ProductSupplier[]
+  saleItems         SaleItem[]
+  purchaseItems     PurchaseItem[]
+  openingBalances   InventoryOpeningBalance[]
+  movements         InventoryMovement[]
+  adjustments       InventoryAdjustment[]
+  monthlyCosts      InventoryMonthlyCost[]
+
+  @@unique([tenantId, sku])
+  @@index([tenantId, type, status])
+  @@index([tenantId, categoryId])
+  @@map("products")
+}
+
+model ProductSupplier {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  productId    String   @map("product_id") @db.Uuid
+  supplierId   String   @map("supplier_id") @db.Uuid
+  supplierSku  String?  @map("supplier_sku")
+  lastUnitCost Decimal? @map("last_unit_cost") @db.Decimal(14, 4)
+  isPrimary    Boolean  @default(false) @map("is_primary")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, productId, supplierId])
+  @@map("product_suppliers")
+}
+
+// ============================================================================
+// 6.4 VENTAS (Hoja REGISTRO DE VENTAS + COBROS DE CLIENTES)
+// ============================================================================
+
+model Sale {
+  id                 String           @id @default(uuid()) @db.Uuid
+  tenantId           String           @map("tenant_id") @db.Uuid
+  saleNumber         String           @map("sale_number") // vta_ID (ej. VTA-0001)
+  documentNumber     String?          @map("document_number") // vta_Doc
+  customerId         String           @map("customer_id") @db.Uuid // vta_Cliente
+  date               DateTime         @db.Date // vta_Fecha
+  operatingYear      Int              @map("operating_year") // vta_Anio
+  operatingMonth     Int              @map("operating_month") // vta_Mes (1..12)
+  paymentCondition   PaymentCondition @map("payment_condition") // vta_Cond: CASH o CREDIT
+  paymentStatus      SettlementStatus @map("payment_status") // vta_Estado
+  paymentMethodId    String?          @map("payment_method_id") @db.Uuid // vta_Metodo
+  financialAccountId String?          @map("financial_account_id") @db.Uuid // vta_Cuenta (cuando es Contado)
+  creditDays         Int?             @map("credit_days") // vta_Plazo
+  dueDate            DateTime?        @map("due_date") @db.Date // vta_Vence
+  grossSubtotal      Decimal          @map("gross_subtotal") @db.Decimal(14, 2)
+  discountTotal      Decimal          @default(0.00) @map("discount_total") @db.Decimal(14, 2)
+  netSubtotal        Decimal          @map("net_subtotal") @db.Decimal(14, 2) // suma vta_Neto
+  taxTotal           Decimal          @default(0.00) @map("tax_total") @db.Decimal(14, 2) // suma vta_ImpImp
+  grandTotal         Decimal          @map("grand_total") @db.Decimal(14, 2) // suma vta_Total
+  costTotal          Decimal          @default(0.00) @map("cost_total") @db.Decimal(14, 4) // suma vta_CostoT
+  grossProfit        Decimal          @default(0.00) @map("gross_profit") @db.Decimal(14, 4) // suma vta_Util
+  status             DocumentStatus   @default(CONFIRMED)
+  notes              String?          // vta_Obs
+  idempotencyKey     String?          @map("idempotency_key")
+  createdBy          String?          @map("created_by") @db.Uuid
+  voidedBy           String?          @map("voided_by") @db.Uuid
+  voidedAt           DateTime?        @map("voided_at")
+  voidReason         String?          @map("void_reason")
+  createdAt          DateTime         @default(now()) @map("created_at")
+  updatedAt          DateTime         @updatedAt @map("updated_at")
+
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  customer          Customer           @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  paymentMethod     PaymentMethod?     @relation(fields: [paymentMethodId], references: [id], onDelete: Restrict)
+  financialAccount  FinancialAccount?  @relation(fields: [financialAccountId], references: [id], onDelete: Restrict)
+  items             SaleItem[]
+  statusHistory     SaleStatusHistory[]
+  accountReceivable AccountReceivable?
+
+  @@unique([tenantId, saleNumber])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, date])
+  @@index([tenantId, operatingYear, operatingMonth])
+  @@index([tenantId, customerId])
+  @@map("sales")
+}
+
+model SaleItem {
+  id                 String   @id @default(uuid()) @db.Uuid
+  tenantId           String   @map("tenant_id") @db.Uuid
+  saleId             String   @map("sale_id") @db.Uuid
+  lineNumber         Int      @default(1) @map("line_number")
+  productId          String   @map("product_id") @db.Uuid // vta_SKU
+  itemType           ItemType @map("item_type") // vta_Tipo: PRODUCT o SERVICE
+  quantity           Decimal  @db.Decimal(14, 4) // vta_Cant
+  unitPrice          Decimal  @map("unit_price") @db.Decimal(14, 4) // vta_Precio
+  discountPercentage Decimal  @default(0.0000) @map("discount_percentage") @db.Decimal(7, 4) // vta_Desc (0..1)
+  taxProfileId       String   @map("tax_profile_id") @db.Uuid // vta_Imp
+  taxRateSnapshot    Decimal  @default(0.0000) @map("tax_rate_snapshot") @db.Decimal(7, 4)
+  netSubtotal        Decimal  @map("net_subtotal") @db.Decimal(14, 2) // vta_Neto = ROUND(qty * price * (1 - disc), 2)
+  taxAmount          Decimal  @map("tax_amount") @db.Decimal(14, 2)   // vta_ImpImp = ROUND(netSubtotal * taxRate, 2)
+  lineTotal          Decimal  @map("line_total") @db.Decimal(14, 2)   // vta_Total = netSubtotal + taxAmount
+  historicalUnitCost Decimal  @map("historical_unit_cost") @db.Decimal(14, 6) // vta_CostoU (CPP del mes o costo ref servicio)
+  manualUnitCost     Decimal? @map("manual_unit_cost") @db.Decimal(14, 6)     // vta_CostoMan (opcional)
+  costTotal          Decimal  @map("cost_total") @db.Decimal(14, 4)   // vta_CostoT = quantity * historicalUnitCost
+  grossProfit        Decimal  @map("gross_profit") @db.Decimal(14, 4) // vta_Util = netSubtotal - costTotal
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  sale       Sale       @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  product    Product    @relation(fields: [productId], references: [id], onDelete: Restrict)
+  taxProfile TaxProfile @relation(fields: [taxProfileId], references: [id], onDelete: Restrict)
+
+  @@unique([saleId, productId]) // Regla Excel: COUNTIFS(vta_ID,$A7,vta_SKU,$D7)=1 (sin líneas repetidas del mismo SKU en la misma venta)
+  @@index([tenantId, productId])
+  @@map("sale_items")
+}
+
+model SaleStatusHistory {
+  id         String         @id @default(uuid()) @db.Uuid
+  saleId     String         @map("sale_id") @db.Uuid
+  fromStatus DocumentStatus? @map("from_status")
+  toStatus   DocumentStatus @map("to_status")
+  reason     String?
+  changedBy  String?        @map("changed_by") @db.Uuid
+  createdAt  DateTime       @default(now()) @map("created_at")
+
+  sale Sale @relation(fields: [saleId], references: [id], onDelete: Restrict)
+
+  @@index([saleId])
+  @@map("sale_status_history")
+}
+
+// Registro de Cobros de Clientes (tblCobros en REGISTRO MOVIMIENTOS Y AJUSTES)
+model SalePayment {
+  id                 String         @id @default(uuid()) @db.Uuid
+  tenantId           String         @map("tenant_id") @db.Uuid
+  collectionNumber   String         @map("collection_number") // cob_ID
+  date               DateTime       @db.Date                  // cob_Fecha
+  amount             Decimal        @db.Decimal(14, 2)        // cob_Importe
+  paymentMethodId    String         @map("payment_method_id") @db.Uuid    // cob_Metodo
+  financialAccountId String         @map("financial_account_id") @db.Uuid // cob_Cuenta
+  reference          String?        // cob_Ref
+  notes              String?        // cob_Motivo
+  status             DocumentStatus @default(CONFIRMED)
+  idempotencyKey     String?        @map("idempotency_key")
+  createdBy          String?        @map("created_by") @db.Uuid
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+
+  tenant           Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  paymentMethod    PaymentMethod          @relation(fields: [paymentMethodId], references: [id], onDelete: Restrict)
+  financialAccount FinancialAccount       @relation(fields: [financialAccountId], references: [id], onDelete: Restrict)
+  allocations      ReceivableAllocation[]
+
+  @@unique([tenantId, collectionNumber])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, date])
+  @@map("sale_payments")
+}
+
+// ============================================================================
+// 6.5 COMPRAS DE INVENTARIO (Hoja COMPRAS + PAGOS A PROVEEDORES)
+// ============================================================================
+
+model Purchase {
+  id                     String           @id @default(uuid()) @db.Uuid
+  tenantId               String           @map("tenant_id") @db.Uuid
+  purchaseNumber         String           @map("purchase_number") // comp_ID
+  supplierId             String           @map("supplier_id") @db.Uuid // comp_Prov
+  date                   DateTime         @db.Date // comp_Fecha
+  operatingYear          Int              @map("operating_year") // comp_Anio
+  operatingMonth         Int              @map("operating_month") // comp_Mes
+  paymentCondition       PaymentCondition @map("payment_condition") // comp_Cond: CASH o CREDIT
+  paymentStatus          SettlementStatus @map("payment_status") // comp_Estado
+  dueDate                DateTime?        @map("due_date") @db.Date // comp_VenceEf
+  financialAccountId     String?          @map("financial_account_id") @db.Uuid // comp_Cuenta (cuando es Contado)
+  documentReference      String?          @map("document_reference") // comp_Ref
+  netSubtotal            Decimal          @map("net_subtotal") @db.Decimal(14, 2) // suma comp_Neto
+  taxTotal               Decimal          @default(0.00) @map("tax_total") @db.Decimal(14, 2) // suma comp_ImpImp
+  grandTotal             Decimal          @map("grand_total") @db.Decimal(14, 2) // suma comp_Total
+  inventoryCapitalizedCost Decimal        @map("inventory_capitalized_cost") @db.Decimal(14, 2) // suma comp_CostoInv
+  status                 DocumentStatus   @default(CONFIRMED)
+  idempotencyKey         String?          @map("idempotency_key")
+  createdBy              String?          @map("created_by") @db.Uuid
+  voidedBy               String?          @map("voided_by") @db.Uuid
+  voidedAt               DateTime?        @map("voided_at")
+  voidReason             String?          @map("void_reason")
+  createdAt              DateTime         @default(now()) @map("created_at")
+  updatedAt              DateTime         @updatedAt @map("updated_at")
+
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  supplier         Supplier          @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  financialAccount FinancialAccount? @relation(fields: [financialAccountId], references: [id], onDelete: Restrict)
+  items            PurchaseItem[]
+  accountPayable   AccountPayable?
+
+  @@unique([tenantId, purchaseNumber])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, date])
+  @@index([tenantId, operatingYear, operatingMonth])
+  @@map("purchases")
+}
+
+model PurchaseItem {
+  id                       String   @id @default(uuid()) @db.Uuid
+  tenantId                 String   @map("tenant_id") @db.Uuid
+  purchaseId               String   @map("purchase_id") @db.Uuid
+  lineNumber               Int      @default(1) @map("line_number")
+  productId                String   @map("product_id") @db.Uuid // comp_SKU (solo tipo PRODUCT)
+  quantity                 Decimal  @db.Decimal(14, 4) // comp_Cant
+  unitCost                 Decimal  @map("unit_cost") @db.Decimal(14, 4) // comp_Costo
+  discountPercentage       Decimal  @default(0.0000) @map("discount_percentage") @db.Decimal(7, 4) // comp_Desc
+  taxProfileId             String   @map("tax_profile_id") @db.Uuid // comp_Imp
+  taxRateSnapshot          Decimal  @default(0.0000) @map("tax_rate_snapshot") @db.Decimal(7, 4)
+  netSubtotal              Decimal  @map("net_subtotal") @db.Decimal(14, 2) // comp_Neto = ROUND(qty * cost * (1 - disc), 2)
+  taxAmount                Decimal  @map("tax_amount") @db.Decimal(14, 2)   // comp_ImpImp = ROUND(netSubtotal * taxRate, 2)
+  lineTotal                Decimal  @map("line_total") @db.Decimal(14, 2)   // comp_Total = netSubtotal + taxAmount
+  inventoryCapitalizedCost Decimal  @map("inventory_capitalized_cost") @db.Decimal(14, 2) // comp_CostoInv = netSubtotal + (cfg_ImpCosto == 1 ? taxAmount : 0)
+  createdAt                DateTime @default(now()) @map("created_at")
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  purchase   Purchase   @relation(fields: [purchaseId], references: [id], onDelete: Restrict)
+  product    Product    @relation(fields: [productId], references: [id], onDelete: Restrict)
+  taxProfile TaxProfile @relation(fields: [taxProfileId], references: [id], onDelete: Restrict)
+
+  @@unique([purchaseId, productId]) // Regla Excel: COUNTIFS(comp_ID,$A7,comp_SKU,$D7)=1
+  @@index([tenantId, productId])
+  @@map("purchase_items")
+}
+
+// Registro de Pagos de Obligaciones a Crédito (tblPagos en REGISTRO MOVIMIENTOS Y AJUSTES)
+model PurchasePayment {
+  id                 String         @id @default(uuid()) @db.Uuid
+  tenantId           String         @map("tenant_id") @db.Uuid
+  paymentNumber      String         @map("payment_number") // pag_ID
+  date               DateTime       @db.Date               // pag_Fecha
+  amount             Decimal        @db.Decimal(14, 2)     // pag_Importe
+  paymentMethodId    String         @map("payment_method_id") @db.Uuid    // pag_Metodo
+  financialAccountId String         @map("financial_account_id") @db.Uuid // pag_Cuenta
+  reference          String?        // pag_Ref
+  notes              String?        // pag_Motivo
+  status             DocumentStatus @default(CONFIRMED)
+  idempotencyKey     String?        @map("idempotency_key")
+  createdBy          String?        @map("created_by") @db.Uuid
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+
+  tenant           Tenant              @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  paymentMethod    PaymentMethod       @relation(fields: [paymentMethodId], references: [id], onDelete: Restrict)
+  financialAccount FinancialAccount    @relation(fields: [financialAccountId], references: [id], onDelete: Restrict)
+  allocations      PayableAllocation[]
+
+  @@unique([tenantId, paymentNumber])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, date])
+  @@map("purchase_payments")
+}
+
+// ============================================================================
+// 6.6 GASTOS OPERATIVOS (Hoja GASTOS OPERATIVOS)
+// ============================================================================
+
+model OperatingExpense {
+  id                   String           @id @default(uuid()) @db.Uuid
+  tenantId             String           @map("tenant_id") @db.Uuid
+  expenseNumber        String           @map("expense_number") // gas_ID
+  date                 DateTime         @db.Date               // gas_Fecha
+  operatingYear        Int              @map("operating_year") // gas_Anio
+  operatingMonth       Int              @map("operating_month") // gas_Mes
+  categoryId           String           @map("category_id") @db.Uuid // gas_Cat
+  description          String           // gas_Desc
+  netAmount            Decimal          @map("net_amount") @db.Decimal(14, 2) // gas_Importe (sin impuesto)
+  taxProfileId         String           @map("tax_profile_id") @db.Uuid       // gas_Imp
+  taxRateSnapshot      Decimal          @default(0.0000) @map("tax_rate_snapshot") @db.Decimal(7, 4)
+  taxAmount            Decimal          @default(0.00) @map("tax_amount") @db.Decimal(14, 2) // gas_ImpImp
+  totalAmount          Decimal          @map("total_amount") @db.Decimal(14, 2)              // gas_Total = netAmount + taxAmount
+  incomeStatementAmount Decimal         @map("income_statement_amount") @db.Decimal(14, 2)   // gas_Resultados = netAmount + (cfg_ImpCosto == 1 ? taxAmount : 0)
+  paymentCondition     PaymentCondition @map("payment_condition") // gas_Cond: CASH o CREDIT
+  paymentStatus        SettlementStatus @map("payment_status")    // gas_Estado
+  paymentMethodId      String?          @map("payment_method_id") @db.Uuid    // gas_Metodo
+  financialAccountId   String?          @map("financial_account_id") @db.Uuid // gas_Cuenta (cuando es Contado)
+  dueDate              DateTime?        @map("due_date") @db.Date             // gas_VenceEf
+  receiptNumber        String?          @map("receipt_number")                // gas_Comp
+  status               DocumentStatus   @default(CONFIRMED)
+  idempotencyKey       String?          @map("idempotency_key")
+  createdBy            String?          @map("created_by") @db.Uuid
+  voidedBy             String?          @map("voided_by") @db.Uuid
+  voidedAt             DateTime?        @map("voided_at")
+  voidReason           String?          @map("void_reason")
+  createdAt            DateTime         @default(now()) @map("created_at")
+  updatedAt            DateTime         @updatedAt @map("updated_at")
+
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  category         ExpenseCategory   @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  taxProfile       TaxProfile        @relation(fields: [taxProfileId], references: [id], onDelete: Restrict)
+  paymentMethod    PaymentMethod?    @relation(fields: [paymentMethodId], references: [id], onDelete: Restrict)
+  financialAccount FinancialAccount? @relation(fields: [financialAccountId], references: [id], onDelete: Restrict)
+  accountPayable   AccountPayable?
+
+  @@unique([tenantId, expenseNumber])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, date])
+  @@index([tenantId, operatingYear, operatingMonth])
+  @@index([tenantId, categoryId])
+  @@map("operating_expenses")
+}
+
+// ============================================================================
+// 6.7 INVENTARIO Y COSTO PROMEDIO PONDERADO MENSUAL (Hojas INVENTARIO y CÁLCULO DE COSTOS)
+// ============================================================================
+
+model InventoryOpeningBalance {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  productId     String   @map("product_id") @db.Uuid
+  operatingYear Int      @map("operating_year")
+  quantity      Decimal  @default(0.0000) @db.Decimal(14, 4) // inv_StockIni
+  unitCost      Decimal  @default(0.0000) @map("unit_cost") @db.Decimal(14, 6) // inv_CostoIni
+  totalValue    Decimal  @default(0.00) @map("total_value") @db.Decimal(14, 4) // S8 = E8 * F8
+  createdBy     String?  @map("created_by") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, productId, operatingYear])
+  @@map("inventory_opening_balances")
+}
+
+model InventoryMovement {
+  id           String                @id @default(uuid()) @db.Uuid
+  tenantId     String                @map("tenant_id") @db.Uuid
+  productId    String                @map("product_id") @db.Uuid
+  date         DateTime              @db.Date
+  year         Int
+  month        Int
+  movementType InventoryMovementType @map("movement_type")
+  quantity     Decimal               @db.Decimal(14, 4) // Siempre positivo; el signo lo define movementType
+  unitCost     Decimal               @map("unit_cost") @db.Decimal(14, 6)
+  totalCost    Decimal               @map("total_cost") @db.Decimal(14, 4)
+  sourceType   String                @map("source_type") // OPENING, PURCHASE, SALE, ADJUSTMENT, VOID
+  sourceId     String                @map("source_id")
+  createdBy    String?               @map("created_by") @db.Uuid
+  createdAt    DateTime              @default(now()) @map("created_at")
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, productId, year, month])
+  @@index([tenantId, sourceType, sourceId])
+  @@map("inventory_movements")
+}
+
+// Ajustes de Inventario (tblAjustesInv en REGISTRO MOVIMIENTOS Y AJUSTES)
+model InventoryAdjustment {
+  id                  String                        @id @default(uuid()) @db.Uuid
+  tenantId            String                        @map("tenant_id") @db.Uuid
+  adjustmentNumber    String                        @map("adjustment_number") // aji_ID
+  date                DateTime                      @db.Date                  // aji_Fecha
+  operatingYear       Int                           @map("operating_year")
+  operatingMonth      Int                           @map("operating_month")
+  productId           String                        @map("product_id") @db.Uuid // aji_SKU
+  isPositive          Boolean                       @map("is_positive") // aji_Tipo: true = "Positivo (+)", false = "Negativo (-)"
+  reasonType          InventoryAdjustmentReasonType @default(CORRECTION) @map("reason_type")
+  quantity            Decimal                       @db.Decimal(14, 4)  // aji_Cant (siempre positiva)
+  reason              String                        // aji_Motivo (obligatorio)
+  relatedDocumentRef  String?                       @map("related_document_ref") // aji_Vinculo
+  appliedMonthlyAvgCost Decimal                     @map("applied_monthly_avg_cost") @db.Decimal(14, 6)
+  totalValuation      Decimal                       @map("total_valuation") @db.Decimal(14, 4) // aji_Valor (+ para positivo, - para negativo)
+  status              DocumentStatus                @default(CONFIRMED)
+  createdBy           String?                       @map("created_by") @db.Uuid
+  createdAt           DateTime                      @default(now()) @map("created_at")
+  updatedAt           DateTime                      @updatedAt @map("updated_at")
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, adjustmentNumber])
+  @@index([tenantId, productId, operatingYear, operatingMonth])
+  @@map("inventory_adjustments")
+}
+
+// Matriz persistida de Costo Promedio Ponderado Mensual por producto (Hoja CÁLCULO DE COSTOS)
+model InventoryMonthlyCost {
+  id                   String   @id @default(uuid()) @db.Uuid
+  tenantId             String   @map("tenant_id") @db.Uuid
+  productId            String   @map("product_id") @db.Uuid
+  year                 Int
+  month                Int      // 1..12
+  openingQuantity      Decimal  @default(0.0000) @map("opening_quantity") @db.Decimal(14, 4)      // cc_QOpen
+  openingValue         Decimal  @default(0.0000) @map("opening_value") @db.Decimal(14, 4)         // cc_VOpen
+  purchasedQuantity    Decimal  @default(0.0000) @map("purchased_quantity") @db.Decimal(14, 4)    // cc_PQty
+  purchasedCost        Decimal  @default(0.0000) @map("purchased_cost") @db.Decimal(14, 4)        // cc_PCost (costo p/ inventario)
+  weightedAverageCost  Decimal  @default(0.000000) @map("weighted_average_cost") @db.Decimal(14, 6) // cc_Avg
+  soldQuantity         Decimal  @default(0.0000) @map("sold_quantity") @db.Decimal(14, 4)         // cc_SQty
+  costOfGoodsSold      Decimal  @default(0.0000) @map("cost_of_goods_sold") @db.Decimal(14, 4)    // cc_SQty * cc_Avg
+  positiveAdjQuantity  Decimal  @default(0.0000) @map("positive_adj_quantity") @db.Decimal(14, 4) // cc_APos
+  negativeAdjQuantity  Decimal  @default(0.0000) @map("negative_adj_quantity") @db.Decimal(14, 4) // cc_ANeg
+  netAdjustmentsValue  Decimal  @default(0.0000) @map("net_adjustments_value") @db.Decimal(14, 4) // (cc_APos - cc_ANeg) * cc_Avg
+  closingQuantity      Decimal  @default(0.0000) @map("closing_quantity") @db.Decimal(14, 4)      // cc_QClose
+  closingValue         Decimal  @default(0.0000) @map("closing_value") @db.Decimal(14, 4)         // cc_VClose = cc_QClose * cc_Avg
+  lastCalculatedAt     DateTime @default(now()) @map("last_calculated_at")
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, productId, year, month])
+  @@index([tenantId, year, month])
+  @@map("inventory_monthly_costs")
+}
+
+model InventoryValuationPeriod {
+  id             String    @id @default(uuid()) @db.Uuid
+  tenantId       String    @map("tenant_id") @db.Uuid
+  year           Int
+  month          Int
+  isClosed       Boolean   @default(false) @map("is_closed")
+  closedAt       DateTime? @map("closed_at")
+  closedBy       String?   @map("closed_by") @db.Uuid
+  reopenedReason String?   @map("reopened_reason")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, year, month])
+  @@map("inventory_valuation_periods")
+}
+
+// ============================================================================
+// 6.8 FINANZAS: CUENTAS POR COBRAR, CUENTAS POR PAGAR, CAJA Y BANCOS
+// ============================================================================
+
+model AccountReceivable {
+  id              String           @id @default(uuid()) @db.Uuid
+  tenantId        String           @map("tenant_id") @db.Uuid
+  saleId          String           @unique @map("sale_id") @db.Uuid
+  documentNumber  String           @map("document_number") // cxc_ID (= vta_ID)
+  customerId      String           @map("customer_id") @db.Uuid // cxc_Cliente
+  issueDate       DateTime         @map("issue_date") @db.Date  // cxc_Fecha
+  dueDate         DateTime         @map("due_date") @db.Date    // cxc_Vence
+  originalAmount  Decimal          @map("original_amount") @db.Decimal(14, 2) // cxc_Orig
+  paidAmount      Decimal          @default(0.00) @map("paid_amount") @db.Decimal(14, 2) // cxc_Abonos
+  balanceAmount   Decimal          @map("balance_amount") @db.Decimal(14, 2)  // cxc_Saldo = ROUND(orig - abonos, 2)
+  status          SettlementStatus @default(PENDING) // cxc_Estado
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+
+  tenant      Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  sale        Sale                   @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  customer    Customer               @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  allocations ReceivableAllocation[]
+
+  @@unique([tenantId, documentNumber])
+  @@index([tenantId, status, dueDate])
+  @@index([tenantId, customerId])
+  @@map("accounts_receivable")
+}
+
+model ReceivableAllocation {
+  id                  String   @id @default(uuid()) @db.Uuid
+  tenantId            String   @map("tenant_id") @db.Uuid
+  accountReceivableId String   @map("account_receivable_id") @db.Uuid
+  salePaymentId       String   @map("sale_payment_id") @db.Uuid
+  allocatedAmount     Decimal  @map("allocated_amount") @db.Decimal(14, 2)
+  allocatedAt         DateTime @default(now()) @map("allocated_at")
+
+  tenant            Tenant            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  accountReceivable AccountReceivable @relation(fields: [accountReceivableId], references: [id], onDelete: Restrict)
+  salePayment       SalePayment       @relation(fields: [salePaymentId], references: [id], onDelete: Restrict)
+
+  @@unique([accountReceivableId, salePaymentId])
+  @@index([tenantId])
+  @@map("receivable_allocations")
+}
+
+model AccountPayable {
+  id             String            @id @default(uuid()) @db.Uuid
+  tenantId       String            @map("tenant_id") @db.Uuid
+  sourceType     PayableSourceType @map("source_type") // cxp_Fuente: PURCHASE ("C") o EXPENSE ("G")
+  purchaseId     String?           @unique @map("purchase_id") @db.Uuid
+  expenseId      String?           @unique @map("expense_id") @db.Uuid
+  documentNumber String            @map("document_number") // cxp_ID (= comp_ID o gas_ID)
+  supplierId     String?           @map("supplier_id") @db.Uuid
+  creditorName   String            @map("creditor_name") // cxp_Prov (Nombre proveedor o "Gasto: <Categoría>")
+  issueDate      DateTime          @map("issue_date") @db.Date // cxp_Fecha
+  dueDate        DateTime          @map("due_date") @db.Date   // cxp_Vence
+  originalAmount Decimal           @map("original_amount") @db.Decimal(14, 2) // cxp_Orig
+  paidAmount     Decimal           @default(0.00) @map("paid_amount") @db.Decimal(14, 2) // cxp_Pagos
+  balanceAmount  Decimal           @map("balance_amount") @db.Decimal(14, 2)  // cxp_Saldo = ROUND(orig - pagos, 2)
+  status         SettlementStatus  @default(PENDING) // cxp_Estado
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  purchase    Purchase?           @relation(fields: [purchaseId], references: [id], onDelete: Restrict)
+  expense     OperatingExpense?   @relation(fields: [expenseId], references: [id], onDelete: Restrict)
+  supplier    Supplier?           @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  allocations PayableAllocation[]
+
+  @@unique([tenantId, documentNumber])
+  @@index([tenantId, status, dueDate])
+  @@map("accounts_payable")
+}
+
+model PayableAllocation {
+  id                String   @id @default(uuid()) @db.Uuid
+  tenantId          String   @map("tenant_id") @db.Uuid
+  accountPayableId  String   @map("account_payable_id") @db.Uuid
+  purchasePaymentId String   @map("purchase_payment_id") @db.Uuid
+  allocatedAmount   Decimal  @map("allocated_amount") @db.Decimal(14, 2)
+  allocatedAt       DateTime @default(now()) @map("allocated_at")
+
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  accountPayable  AccountPayable  @relation(fields: [accountPayableId], references: [id], onDelete: Restrict)
+  purchasePayment PurchasePayment @relation(fields: [purchasePaymentId], references: [id], onDelete: Restrict)
+
+  @@unique([accountPayableId, purchasePaymentId])
+  @@index([tenantId])
+  @@map("payable_allocations")
+}
+
+// Libro Mayor Unificado de Movimientos de Efectivo por Cuenta (para CAJA Y BANCOS y FLUJO DE CAJA)
+model CashMovement {
+  id                 String                @id @default(uuid()) @db.Uuid
+  tenantId           String                @map("tenant_id") @db.Uuid
+  financialAccountId String                @map("financial_account_id") @db.Uuid
+  paymentMethodId    String?               @map("payment_method_id") @db.Uuid
+  date               DateTime              @db.Date
+  operatingYear      Int                   @map("operating_year")
+  operatingMonth     Int                   @map("operating_month")
+  direction          CashMovementDirection
+  category           CashMovementCategory
+  amount             Decimal               @db.Decimal(14, 2) // Siempre positivo
+  sourceType         String                @map("source_type") // SALE, SALE_PAYMENT, PURCHASE, EXPENSE, PURCHASE_PAYMENT, BANK_TRANSFER, CASH_ADJUSTMENT
+  sourceId           String                @map("source_id")
+  reference          String?
+  description        String?
+  createdBy          String?               @map("created_by") @db.Uuid
+  createdAt          DateTime              @default(now()) @map("created_at")
+
+  tenant           Tenant           @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  financialAccount FinancialAccount @relation(fields: [financialAccountId], references: [id], onDelete: Restrict)
+  paymentMethod    PaymentMethod?   @relation(fields: [paymentMethodId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, financialAccountId, date])
+  @@index([tenantId, operatingYear, operatingMonth, category])
+  @@index([tenantId, sourceType, sourceId])
+  @@map("cash_movements")
+}
+
+// Transferencias entre cuentas propias (tblTransferencias en REGISTRO MOVIMIENTOS Y AJUSTES)
+model BankTransfer {
+  id                   String         @id @default(uuid()) @db.Uuid
+  tenantId             String         @map("tenant_id") @db.Uuid
+  transferNumber       String         @map("transfer_number") // trf_ID
+  date                 DateTime       @db.Date                // trf_Fecha
+  operatingYear        Int            @map("operating_year")
+  operatingMonth       Int            @map("operating_month")
+  sourceAccountId      String         @map("source_account_id") @db.Uuid // trf_Origen
+  destinationAccountId String         @map("destination_account_id") @db.Uuid // trf_Destino
+  amount               Decimal        @db.Decimal(14, 2)      // trf_Importe
+  reference            String?        // trf_Ref
+  reason               String?        // trf_Motivo
+  relatedOperationRef  String?        @map("related_operation_ref") // trf_Vinculo
+  status               DocumentStatus @default(CONFIRMED)
+  idempotencyKey       String?        @map("idempotency_key")
+  createdBy            String?        @map("created_by") @db.Uuid
+  createdAt            DateTime       @default(now()) @map("created_at")
+  updatedAt            DateTime       @updatedAt @map("updated_at")
+
+  tenant             Tenant           @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  sourceAccount      FinancialAccount @relation("TransferSourceAccount", fields: [sourceAccountId], references: [id], onDelete: Restrict)
+  destinationAccount FinancialAccount @relation("TransferDestAccount", fields: [destinationAccountId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, transferNumber])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, date])
+  @@map("bank_transfers")
+}
+
+// Correcciones Justificadas de Caja y Bancos (tblCorrecciones en REGISTRO MOVIMIENTOS Y AJUSTES)
+model CashAdjustment {
+  id                  String                @id @default(uuid()) @db.Uuid
+  tenantId            String                @map("tenant_id") @db.Uuid
+  adjustmentNumber    String                @map("adjustment_number") // cor_ID
+  date                DateTime              @db.Date                  // cor_Fecha
+  operatingYear       Int                   @map("operating_year")
+  operatingMonth      Int                   @map("operating_month")
+  financialAccountId  String                @map("financial_account_id") @db.Uuid // cor_Cuenta
+  direction           CashMovementDirection // cor_Tipo: INFLOW ("Entrada (+)") o OUTFLOW ("Salida (-)")
+  amount              Decimal               @db.Decimal(14, 2)        // cor_Importe
+  reason              String                // cor_Motivo (obligatorio)
+  relatedDocumentRef  String?               @map("related_document_ref") // cor_Vinculo
+  status              DocumentStatus        @default(CONFIRMED)
+  createdBy           String?               @map("created_by") @db.Uuid
+  createdAt           DateTime              @default(now()) @map("created_at")
+  updatedAt           DateTime              @updatedAt @map("updated_at")
+
+  tenant           Tenant           @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  financialAccount FinancialAccount @relation(fields: [financialAccountId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, adjustmentNumber])
+  @@index([tenantId, date])
+  @@map("cash_adjustments")
+}
+
+// Historial de ejecuciones del Centro de Control y Conciliación (Hoja CONTROLES)
+model FinancialReconciliation {
+  id           String               @id @default(uuid()) @db.Uuid
+  tenantId     String               @map("tenant_id") @db.Uuid
+  executedAt   DateTime             @default(now()) @map("executed_at")
+  executedBy   String?              @map("executed_by") @db.Uuid
+  tolerance    Decimal              @db.Decimal(8, 4)
+  okCount      Int                  @map("ok_count")
+  reviewCount  Int                  @map("review_count")
+  alertCount   Int                  @map("alert_count")
+  overallState ReconciliationStatus @map("overall_state")
+  resultsJson  Json                 @map("results_json") // Detalle de los 31 controles (código, área, valorA, valorB, diferencia, estado, recomendación)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, executedAt])
+  @@map("financial_reconciliations")
+}
+
